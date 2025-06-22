@@ -68,4 +68,3 @@ def hmc(key: jax.random.PRNGKey,
                            (x0, step_size),
                            split(key, n_steps))
     return path[burn_in:]
-

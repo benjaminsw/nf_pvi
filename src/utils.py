@@ -20,7 +20,7 @@ from src.trainers.sm import de_step as sm_de_step
 
 # Import NF-PVI implementation
 try:
-    from src.trainers.nf_pvi import nf_step as nf_pvi_de_step
+    from src.trainers.simple_nf_pvi import nf_step as nf_pvi_de_step, create_nf_pid
     NF_PVI_AVAILABLE = True
 except ImportError as e:
     print(f"Warning: Could not import NF-PVI implementation: {e}")
@@ -117,16 +117,16 @@ def make_nf_model(key: jax.random.PRNGKey,
     Make an NF-PVI model based on the model hyperparameters.
     """
     try:
-        from src.trainers.nf_pvi import NFPID
+        from src.trainers.simple_nf_pvi import create_nf_pid
         
-        return NFPID(
+        return create_nf_pid(
+            key=key,
+            d_x=d_x,
+            d_z=model_parameters.d_z,
+            d_y=model_parameters.d_y,
             n_particles=model_parameters.n_particles,
-            particle_dim=getattr(model_parameters, 'particle_dim', model_parameters.d_z),
-            base_dim=model_parameters.d_z,
-            target_dim=d_x,
-            n_flow_layers=getattr(model_parameters, 'n_flow_layers', 4),
-            hidden_dim=getattr(model_parameters, 'flow_hidden_dim', 64),
-            key=key
+            n_hidden=model_parameters.n_hidden,
+            flow_hidden=getattr(model_parameters, 'flow_hidden_dim', 64)
         )
     except ImportError:
         # Fallback to regular PID if NF-PVI is not available
