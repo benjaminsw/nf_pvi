@@ -18,6 +18,14 @@ from src.trainers.svi import de_step as svi_de_step
 from src.trainers.uvi import de_step as uvi_de_step
 from src.trainers.sm import de_step as sm_de_step
 
+# Import NF-PVI implementation
+try:
+    from src.trainers.nf_pvi import nf_step as nf_pvi_de_step
+    NF_PVI_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Could not import NF-PVI implementation: {e}")
+    NF_PVI_AVAILABLE = False
+
 # Import fixed WGF-GMM implementation
 try:
     from src.trainers.wgf_gmm import wgf_gmm_pvi_step
@@ -91,14 +99,39 @@ def gmm_pvi_de_step(key, carry, target, y, optim, hyperparams):
     return wgf_gmm_de_step(key, carry, target, y, optim, hyperparams)
 
 
-# Update DE_STEPS to include both WGF-GMM and GMM-PVI
+# Update DE_STEPS to include NF-PVI, WGF-GMM and GMM-PVI
 DE_STEPS = {
     'pvi': pvi_de_step,
+    'nf_pvi': nf_pvi_de_step if NF_PVI_AVAILABLE else pvi_de_step,  # Fallback to regular PVI if not available
     'wgf_gmm': wgf_gmm_de_step,
     'svi': svi_de_step,
     'uvi': uvi_de_step,
     'sm': sm_de_step
 }
+
+
+def make_nf_model(key: jax.random.PRNGKey,
+                  model_parameters: ModelParameters,
+                  d_x: int):
+    """
+    Make an NF-PVI model based on the model hyperparameters.
+    """
+    try:
+        from src.trainers.nf_pvi import NFPID
+        
+        return NFPID(
+            n_particles=model_parameters.n_particles,
+            particle_dim=getattr(model_parameters, 'particle_dim', model_parameters.d_z),
+            base_dim=model_parameters.d_z,
+            target_dim=d_x,
+            n_flow_layers=getattr(model_parameters, 'n_flow_layers', 4),
+            hidden_dim=getattr(model_parameters, 'flow_hidden_dim', 64),
+            key=key
+        )
+    except ImportError:
+        # Fallback to regular PID if NF-PVI is not available
+        print("Warning: NF-PVI not available, falling back to regular PVI")
+        return make_model(key, model_parameters, d_x)
 
 
 def make_model(key: jax.random.PRNGKey,
@@ -209,9 +242,16 @@ def make_step_and_carry(
     Make a step function and carry for a given algorithm.
     """
     model_key, key = jax.random.split(key, 2)
-    id = make_model(model_key,
-                    parameters.model_parameters,
-                    target.dim)
+    
+    # Use special NF model for NF-PVI algorithm
+    if parameters.algorithm == 'nf_pvi':
+        id = make_nf_model(model_key,
+                          parameters.model_parameters,
+                          target.dim)
+    else:
+        id = make_model(model_key,
+                       parameters.model_parameters,
+                       target.dim)
 
     if parameters.theta_opt_parameters is not None:
         theta_optim = make_theta_opt(parameters.theta_opt_parameters)
@@ -223,9 +263,8 @@ def make_step_and_carry(
     
     id_state = eqx.filter(id, id.get_filter_spec())
     
-    # Handle PVI-based algorithms (pvi, wgf_gmm) the same way
-    # In the make_step_and_carry function, update the PIDCarry creation:
-    if parameters.algorithm in ['pvi', 'wgf_gmm']:
+    # Handle PVI-based algorithms (pvi, nf_pvi, wgf_gmm) the same way
+    if parameters.algorithm in ['pvi', 'nf_pvi', 'wgf_gmm']:
         ropt_key, key = jax.random.split(key, 2)
         r_optim = make_r_opt(ropt_key,
                             parameters.r_opt_parameters)
@@ -275,16 +314,24 @@ def config_to_parameters(config: dict, algorithm: str):
     Make a parameters from a config dictionary and an algorithm name.
     """
     parameters = {'algorithm': algorithm,}
-    parameters['model_parameters'] = ModelParameters(
-        **config[algorithm]['model']
-    )
+    
+    # Get model parameters and add NF-specific ones if needed
+    model_params = dict(config[algorithm]['model'])
+    if algorithm == 'nf_pvi':
+        # Add NF-specific parameters with defaults
+        model_params['particle_dim'] = model_params.get('particle_dim', 2)
+        model_params['n_flow_layers'] = model_params.get('n_flow_layers', 4) 
+        model_params['flow_hidden_dim'] = model_params.get('flow_hidden_dim', 64)
+    
+    parameters['model_parameters'] = ModelParameters(**model_params)
+    
     if 'theta_opt' in config[algorithm]:
         parameters['theta_opt_parameters'] = ThetaOptParameters(
             **config[algorithm]['theta_opt']
         )
     
-    # Handle PVI-based algorithms (pvi, wgf_gmm) the same way
-    if algorithm in ['pvi', 'wgf_gmm']:
+    # Handle PVI-based algorithms (pvi, nf_pvi, wgf_gmm) the same way
+    if algorithm in ['pvi', 'nf_pvi', 'wgf_gmm']:
         parameters['r_opt_parameters'] = ROptParameters(
             **config[algorithm]['r_opt']
         )

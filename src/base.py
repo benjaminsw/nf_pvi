@@ -49,7 +49,12 @@ class ModelParameters(NamedTuple):
     d_y : int = 0
     kernel: str = 'fixed_diag_norm'
     n_particles: int = 0
-    n_components: int = None  # Add this line
+    n_components: int = None  # For GMM algorithms
+    
+    # NF-PVI specific parameters
+    particle_dim: int = None      # Dimension of ρ particles that parameterize flows
+    n_flow_layers: int = 4        # Number of flow layers
+    flow_hidden_dim: int = 64     # Hidden dimension for flow networks
 
 
 class ThetaOptParameters(NamedTuple):
