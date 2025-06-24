@@ -59,9 +59,6 @@ class SimpleNFConditional(Conditional):
         # Get base sample
         base_sample = self.base_conditional.f(z, y, eps)
         
-        # Debug shapes to understand the issue
-        # print(f"z shape: {z.shape}, base_sample shape: {base_sample.shape}, eps shape: {eps.shape}")
-        
         # Flatten all arrays to 1D for concatenation, then reshape flow output appropriately
         z_flat = z.flatten() if z.ndim > 0 else np.array([z])
         base_flat = base_sample.flatten() if base_sample.ndim > 0 else np.array([base_sample])
@@ -80,6 +77,10 @@ class SimpleNFConditional(Conditional):
         enhanced_sample = base_sample + 0.1 * flow_correction
         return enhanced_sample
     
+    def base_sample(self, key: jax.random.PRNGKey, n_samples: int):
+        """Delegate to base conditional."""
+        return self.base_conditional.base_sample(key, n_samples)
+    
     def sample(self, key: jax.random.PRNGKey, n_samples: int, z: jax.Array, y: jax.Array):
         """Sample from the enhanced conditional distribution."""
         # For n_samples > 1, we need to handle vectorization properly
@@ -87,40 +88,16 @@ class SimpleNFConditional(Conditional):
             eps = self.base_sample(key, 1)
             return self.f(z, y, eps).reshape(1, -1)  # Ensure (1, d_x) shape
         else:
-            # For multiple samples, use the base conditional's sample method
-            # and then apply our enhancement
-            base_samples = self.base_conditional.sample(key, n_samples, z, y)
+            # For multiple samples, vectorize over the f function
+            keys = jax.random.split(key, n_samples)
             
-            # Apply flow enhancement to each sample
-            def enhance_sample(sample):
-                # Create flow input
-                z_flat = z.flatten() if z.ndim > 0 else np.array([z])
-                sample_flat = sample.flatten() if sample.ndim > 0 else np.array([sample])
-                flow_input = np.concatenate([z_flat, sample_flat])
-                
-                # Get correction
-                flow_correction = self.flow_net(flow_input)
-                
-                # Apply correction
-                if sample.ndim > 0:
-                    correction = flow_correction.reshape(sample.shape)
-                else:
-                    correction = flow_correction
-                    
-                return sample + 0.1 * correction
+            def sample_one(sample_key):
+                eps = self.base_sample(sample_key, 1)
+                return self.f(z, y, eps[0])  # f expects single eps, not batch
             
-            # Apply enhancement to all samples
-            enhanced_samples = jax.vmap(enhance_sample)(base_samples)
+            # Apply to all samples
+            enhanced_samples = jax.vmap(sample_one)(keys)
             return enhanced_samples
-    
-    def base_sample(self, key: jax.random.PRNGKey, n_samples: int):
-        """Delegate to base conditional."""
-        return self.base_conditional.base_sample(key, n_samples)
-    
-    def sample(self, key: jax.random.PRNGKey, n_samples: int, z: jax.Array, y: jax.Array):
-        """Sample from the enhanced conditional distribution."""
-        eps = self.base_sample(key, n_samples)
-        return self.f(z, y, eps)
     
     def get_filter_spec(self):
         """Return filter specification for optimization."""
